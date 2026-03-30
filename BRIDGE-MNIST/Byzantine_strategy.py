@@ -1,32 +1,37 @@
 import numpy as np
-import tensorflow as tf
 
-def Byz_random(data, label, model, sess):
-    grad = sess.run(model.gradient, feed_dict={model.x: data, model.y_: label, model.keep_prob: 0.5})
-    Byz_grad = [(np.random.random(pair[0].shape) * 50) for pair in grad]
-    return Byz_grad
 
-def Byz_flip(data, label, model, sess):
-    data = (-1) * np.array(data)
-    grad = sess.run(model.gradient, feed_dict={model.x: data, model.y_: label, model.keep_prob: 0.5})
-    Byz_grad = [pair[0] for pair in grad]
-    return Byz_grad
+def Byz_random(data, label, model):
+    grad = model.get_gradient(
+        np.array(data, dtype=np.float32),
+        np.array(label, dtype=np.float32),
+        training=True
+    )
+    return [np.random.random(g.shape) * 50 for g in grad]
 
-def Byz_random_label(data, label, model, sess):
+
+def Byz_flip(data, label, model):
+    data = (-1) * np.array(data, dtype=np.float32)
+    return model.get_gradient(data, np.array(label, dtype=np.float32), training=True)
+
+
+def Byz_random_label(data, label, model):
+    label = np.array(label, dtype=np.float32)
     np.random.shuffle(label)
-    grad = sess.run(model.gradient, feed_dict={model.x: data, model.y_: label, model.keep_prob: 0.5})
-    Byz_grad = [pair[0] for pair in grad]
-    return Byz_grad
-
-def nonfaulty(data, label, model, sess):
-    grad = sess.run(model.gradient, feed_dict={model.x: data, model.y_: label, model.keep_prob: 0.5})
-    Byz_grad = [pair[0] for pair in grad]
-    return Byz_grad
-    
-    
-Byzantine_strategy = {'random': Byz_random,
-                     'flip': Byz_flip,
-                     'random_label': Byz_random_label,
-                     'nonfaulty': nonfaulty}
+    return model.get_gradient(np.array(data, dtype=np.float32), label, training=True)
 
 
+def nonfaulty(data, label, model):
+    return model.get_gradient(
+        np.array(data, dtype=np.float32),
+        np.array(label, dtype=np.float32),
+        training=True
+    )
+
+
+Byzantine_strategy = {
+    'random': Byz_random,
+    'flip': Byz_flip,
+    'random_label': Byz_random_label,
+    'nonfaulty': nonfaulty,
+}

@@ -1,130 +1,76 @@
-#CNN model for MNIST 
-#conv--pool--conv--pool--fc--fc
-
+# CNN model for CIFAR-10
+# conv--pool--conv--pool--fc--fc
 
 import tensorflow as tf
 import numpy as np
 
-def weight_variable(shape):
-  initial = tf.random.truncated_normal(shape, stddev=0.1)
-  return tf.Variable(initial)
-
-def bias_variable(shape):
-  initial = tf.constant(0.1, shape=shape)
-  return tf.Variable(initial)
-
-def conv2d(x, W):
-  return tf.nn.conv2d(x, W, strides=[1, 1, 1, 1], padding='SAME')
-
-def max_pool_2x2(x):
-  return tf.nn.max_pool2d(x, ksize=[1, 2, 2, 1],
-                        strides=[1, 2, 2, 1], padding='SAME')
 
 class CNN:
     def __init__(self, stepsize=1e-4):
-       
-        self.x = tf.compat.v1.placeholder(tf.float32, shape=[None, 3072])
-        self.y_ = tf.compat.v1.placeholder(tf.float32, shape=[None, 10])
-        # g is for apply gradient, com is for assign
-        self.W_conv1 = weight_variable([5, 5, 3, 32])
-        self.W_conv1_g = tf.placeholder(tf.float32, shape=[5,5,3,32])
-        self.W_conv1_com = tf.placeholder(tf.float32, shape=[5,5,3,32])
-        
-        self.b_conv1 = bias_variable([32])
-        self.b_conv1_g = tf.placeholder(tf.float32, shape=[32])
-        self.b_conv1_com = tf.placeholder(tf.float32, shape=[32])
-        
-        self.x_image = tf.reshape(self.x, [-1,32,32,3])
-        
-        self.h_conv1 = tf.nn.relu(conv2d(self.x_image, self.W_conv1) + self.b_conv1)        
-        self.h_pool1 = max_pool_2x2(self.h_conv1)
-        
-        self.W_conv2 = weight_variable([5, 5, 32, 64])
-        self.W_conv2_g = tf.placeholder(tf.float32, shape=[5, 5, 32, 64])
-        self.W_conv2_com = tf.placeholder(tf.float32, shape=[5, 5, 32, 64])
-        
-        self.b_conv2 = bias_variable([64])
-        self.b_conv2_g = tf.placeholder(tf.float32, shape=[64])
-        self.b_conv2_com = tf.placeholder(tf.float32, shape=[64])
-        
-        self.h_conv2 = tf.nn.relu(conv2d(self.h_pool1, self.W_conv2) + self.b_conv2)
-        self.h_pool2 = max_pool_2x2(self.h_conv2)
-        
-        self.W_fc1 = weight_variable([8 * 8 * 64, 1024])
-        self.W_fc1_g = tf.placeholder(tf.float32, shape=[8*8*64, 1024])
-        self.W_fc1_com = tf.placeholder(tf.float32, shape=[8*8*64, 1024])
-        
-        self.b_fc1 = bias_variable([1024])
-        self.b_fc1_g = tf.placeholder(tf.float32, shape=[1024])
-        self.b_fc1_com = tf.placeholder(tf.float32, shape=[1024])
-        
-        self.h_pool2_flat = tf.reshape(self.h_pool2, [-1, 8*8*64])
-        self.h_fc1 = tf.nn.relu(tf.matmul(self.h_pool2_flat, self.W_fc1) + self.b_fc1)
-        
-        self.keep_prob = tf.placeholder(tf.float32)
-        self.h_fc1_drop = tf.nn.dropout(self.h_fc1, self.keep_prob)
-        
-        self.W_fc2 = weight_variable([1024, 10])
-        self.W_fc2_g = tf.placeholder(tf.float32, shape=[1024, 10])
-        self.W_fc2_com = tf.placeholder(tf.float32, shape=[1024, 10])
-        
-        self.b_fc2 = bias_variable([10])
-        self.b_fc2_g = tf.placeholder(tf.float32, shape=[10])
-        self.b_fc2_com = tf.placeholder(tf.float32, shape=[10])
-        
-        self.y_conv = tf.matmul(self.h_fc1_drop, self.W_fc2) + self.b_fc2
-        self.cross_entropy = tf.reduce_mean(
-    tf.nn.softmax_cross_entropy_with_logits(labels=self.y_, logits=self.y_conv))
-        
-        
-        self.optimizer = tf.compat.v1.train.AdamOptimizer(stepsize)
-        
-        
-        
-        self.train_step = self.optimizer.minimize(self.cross_entropy)
-        self.correct_prediction = tf.equal(tf.argmax(self.y_conv,1), tf.argmax(self.y_,1))
-        self.accuracy = tf.reduce_mean(tf.cast(self.correct_prediction, tf.float32))        
-        
-        #Collection of variables
-        self.layers = [self.W_conv1, self.b_conv1, self.W_conv2, self.b_conv2, self.W_fc1, self.b_fc1, self.W_fc2, self.b_fc2]
-        self.calculated_gradient = [self.W_conv1_g, self.b_conv1_g, self.W_conv2_g, self.b_conv2_g, self.W_fc1_g, self.b_fc1_g, self.W_fc2_g, self.b_fc2_g]
-        self.communication_ports = [self.W_conv1_com, self.b_conv1_com, self.W_conv2_com, self.b_conv2_com, self.W_fc1_com, self.b_fc1_com, self.W_fc2_com, self.b_fc2_com]
-        
-        #apply gradients from outside
-        self.g_var_pair =  [[grad, vari] for grad, vari in zip(self.calculated_gradient, self.layers)]
-        self.calculated_update = self.optimizer.apply_gradients(self.g_var_pair)
-        
-        #gradient step using local gradient
-        self.gradient = self.optimizer.compute_gradients(loss = self.cross_entropy, var_list = self.layers)
-        self.local_update = self.optimizer.apply_gradients(self.gradient)  
-        
-        #assign for communication
-        self.communication = [var.assign(port) for var, port in zip(self.layers, self.communication_ports)]
-        
+        self.W_conv1 = tf.Variable(tf.random.truncated_normal([5, 5, 3, 32], stddev=0.1))
+        self.b_conv1 = tf.Variable(tf.constant(0.1, shape=[32]))
 
+        self.W_conv2 = tf.Variable(tf.random.truncated_normal([5, 5, 32, 64], stddev=0.1))
+        self.b_conv2 = tf.Variable(tf.constant(0.1, shape=[64]))
 
-    
-    
+        self.W_fc1 = tf.Variable(tf.random.truncated_normal([8 * 8 * 64, 1024], stddev=0.1))
+        self.b_fc1 = tf.Variable(tf.constant(0.1, shape=[1024]))
+
+        self.W_fc2 = tf.Variable(tf.random.truncated_normal([1024, 10], stddev=0.1))
+        self.b_fc2 = tf.Variable(tf.constant(0.1, shape=[10]))
+
+        self.layers = [
+            self.W_conv1, self.b_conv1,
+            self.W_conv2, self.b_conv2,
+            self.W_fc1, self.b_fc1,
+            self.W_fc2, self.b_fc2,
+        ]
+        self.optimizer = tf.keras.optimizers.Adam(learning_rate=stepsize)
+
+    def __call__(self, x, training=False):
+        x = tf.cast(x, tf.float32)
+        x_image = tf.reshape(x, [-1, 32, 32, 3])
+        h_conv1 = tf.nn.relu(
+            tf.nn.conv2d(x_image, self.W_conv1, strides=[1, 1, 1, 1], padding='SAME') + self.b_conv1)
+        h_pool1 = tf.nn.max_pool2d(h_conv1, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME')
+        h_conv2 = tf.nn.relu(
+            tf.nn.conv2d(h_pool1, self.W_conv2, strides=[1, 1, 1, 1], padding='SAME') + self.b_conv2)
+        h_pool2 = tf.nn.max_pool2d(h_conv2, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME')
+        h_pool2_flat = tf.reshape(h_pool2, [-1, 8 * 8 * 64])
+        h_fc1 = tf.nn.relu(tf.matmul(h_pool2_flat, self.W_fc1) + self.b_fc1)
+        if training:
+            h_fc1 = tf.nn.dropout(h_fc1, rate=0.5)
+        return tf.matmul(h_fc1, self.W_fc2) + self.b_fc2
+
+    def compute_loss(self, x, y_, training=False):
+        logits = self(x, training=training)
+        return tf.reduce_mean(
+            tf.nn.softmax_cross_entropy_with_logits(
+                labels=tf.cast(y_, tf.float32), logits=logits))
+
+    def accuracy_eval(self, x, y_):
+        logits = self(x, training=False)
+        correct = tf.equal(tf.argmax(logits, 1), tf.argmax(tf.cast(y_, tf.float32), 1))
+        return tf.reduce_mean(tf.cast(correct, tf.float32)).numpy()
+
+    def get_gradient(self, x, y_, training=True):
+        with tf.GradientTape() as tape:
+            loss = self.compute_loss(x, y_, training=training)
+        return [g.numpy() for g in tape.gradient(loss, self.layers)]
+
+    def apply_ext_gradient(self, grad):
+        self.optimizer.apply_gradients(zip(
+            [tf.constant(g, dtype=tf.float32) for g in grad], self.layers))
+
+    def train_step_fn(self, x, y_):
+        with tf.GradientTape() as tape:
+            loss = self.compute_loss(x, y_, training=True)
+        grads = tape.gradient(loss, self.layers)
+        self.optimizer.apply_gradients(zip(grads, self.layers))
+
     def weights(self):
-        W_1 = self.W_conv1.eval()
-        b_1 = self.b_conv1.eval()
-        W_2 = self.W_conv2.eval()
-        b_2 = self.b_conv2.eval()
-        W_3 = self.W_fc1.eval()
-        b_3 = self.b_fc1.eval()       
-        W_4 = self.W_fc2.eval()
-        b_4 = self.b_fc2.eval()
-        weight = [W_1, b_1, W_2, b_2, W_3, b_3, W_4, b_4]
-        return weight
-    
-    def assign(self, weight, sess):
-        for layer, op, port in zip(weight, self.communication, self.communication_ports):
-            sess.run(op, feed_dict={port: layer})
-        
+        return [v.numpy() for v in self.layers]
 
-        
-        
-        
-        
-        
-        
+    def assign(self, weight):
+        for var, val in zip(self.layers, weight):
+            var.assign(val)
