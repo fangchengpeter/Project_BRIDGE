@@ -1,98 +1,68 @@
 import tensorflow as tf
 import numpy as np
 
-def weight_variable(shape, std_dev):
-    '''
-    Initialize W matrix
-    '''
-    # Outputs a random matrix with mean 0 and stddev=0.1 from normal distribution
-    # ensures all the random values are within 2 std dev from the mean
-    initial = tf.random.truncated_normal(shape, stddev=std_dev)
-    return tf.Variable(initial)
-
-def bias_variable(shape):
-    '''
-    Initialize bias vector (b)
-    '''
-
-    initial = tf.constant(0.1, shape=shape)
-    return tf.Variable(initial)
 
 class linear_classifier:
     '''
-    Learning a linear classifier used a one layer neural network
+    Learning a linear classifier using a one-layer neural network (TF2 eager mode)
     '''
-    def __init__(self, stepsize=1e-4, sigma2 = 0.1, adam=False):
-        
-        #Placeholder for our 3072-dimensional data (MNIST data)
-        self.x = tf.compat.v1.placeholder(tf.float32, shape=[None, 3072])
-
-        #Placeholder for the output of our linear classifier y=W*x+b
-        self.y_ = tf.compat.v1.placeholder(tf.float32, shape=[None, 10])
-       
-       # Creates the random weights matrix and bias vector
-        self.W = weight_variable([3072, 10], std_dev=sigma2)
-        self.b = bias_variable([10])
-       
-        self.W_com = tf.compat.v1.placeholder(tf.float32, shape=[3072, 10])
-        self.b_com = tf.compat.v1.placeholder(tf.float32, shape=[10])
-       
-        self.y_inf = tf.matmul(self.x, self.W) + self.b
-
-        #Cross entropy loss
-        self.cross_entropy = tf.reduce_mean(
-            tf.nn.softmax_cross_entropy_with_logits(labels=self.y_, logits=self.y_inf))
-
-        #L2 loss regularization parameters
-        self.regularizer = tf.nn.l2_loss(self.W) + tf.nn.l2_loss(self.b)
-
-        #Objective/Loss function
-        self.loss = self.cross_entropy
-        
-        self.stepsize = tf.compat.v1.placeholder(tf.float32, shape=[])
+    def __init__(self, stepsize=1e-4, sigma2=0.1, adam=False):
+        self.W = tf.Variable(tf.random.truncated_normal([3072, 10], stddev=sigma2))
+        self.b = tf.Variable(tf.constant(0.1, shape=[10]))
+        self.layers = [self.W, self.b]
         if adam:
-            self.optimizer = tf.train.AdamOptimizer(self.stepsize)
+            self.optimizer = tf.keras.optimizers.Adam(learning_rate=stepsize)
         else:
-            self.optimizer = tf.compat.v1.train.GradientDescentOptimizer(self.stepsize)
-        self.train_step = self.optimizer.minimize(self.loss)
-        self.correct_prediction = tf.equal(tf.argmax(self.y_inf,1), tf.argmax(self.y_,1))
-        self.accuracy = tf.reduce_mean(tf.cast(self.correct_prediction, tf.float32))        
-       
-        #Collection of variables
-        self.layers = [self.W, self.b]    
-        self.communication_ports = [self.W_com, self.b_com]
-        
-       
-        #assign for communication
-        self.communication = [var.assign(port) for var, port in zip(self.layers, self.communication_ports)]
-       
-        #separate for 1-d update
-        self.gradient_w = self.optimizer.compute_gradients(loss = self.cross_entropy, var_list = [self.W])[0][0]
-        self.gradient_b = self.optimizer.compute_gradients(loss = self.cross_entropy, var_list = [self.b])[0][0]
-        self.gradient_port_w = tf.compat.v1.placeholder(tf.float32, shape=[3072, 10])
-        self.gradient_port_b = tf.compat.v1.placeholder(tf.float32, shape=[10])
-        self.local_update_w = self.optimizer.apply_gradients([[self.gradient_port_w, self.W]])
-        self.local_update_b = self.optimizer.apply_gradients([[self.gradient_port_b, self.b]])
+            self.optimizer = tf.keras.optimizers.SGD(learning_rate=stepsize)
 
-   
+    def __call__(self, x):
+        x = tf.cast(x, tf.float32)
+        return tf.matmul(x, self.W) + self.b
+
+    def compute_loss(self, x, y_):
+        logits = self(x)
+        return tf.reduce_mean(
+            tf.nn.softmax_cross_entropy_with_logits(
+                labels=tf.cast(y_, tf.float32), logits=logits))
+
+    def accuracy_eval(self, x, y_):
+        logits = self(x)
+        correct = tf.equal(tf.argmax(logits, 1), tf.argmax(tf.cast(y_, tf.float32), 1))
+        return tf.reduce_mean(tf.cast(correct, tf.float32)).numpy()
+
+    def train_step_fn(self, x, y_, stepsize):
+        self.optimizer.learning_rate = stepsize
+        with tf.GradientTape() as tape:
+            loss = self.compute_loss(x, y_)
+        grads = tape.gradient(loss, self.layers)
+        self.optimizer.apply_gradients(zip(grads, self.layers))
+
+    def get_gradient_w(self, x, y_):
+        with tf.GradientTape() as tape:
+            loss = self.compute_loss(x, y_)
+        return tape.gradient(loss, self.W).numpy()
+
+    def get_gradient_b(self, x, y_):
+        with tf.GradientTape() as tape:
+            loss = self.compute_loss(x, y_)
+        return tape.gradient(loss, self.b).numpy()
+
+    def apply_gradient_w(self, grad_w, stepsize):
+        self.optimizer.learning_rate = stepsize
+        self.optimizer.apply_gradients(
+            [(tf.constant(grad_w, dtype=tf.float32), self.W)])
+
+    def apply_gradient_b(self, grad_b, stepsize):
+        self.optimizer.learning_rate = stepsize
+        self.optimizer.apply_gradients(
+            [(tf.constant(grad_b, dtype=tf.float32), self.b)])
+
     def weights(self):
         '''
-        Return list containing weight matrix and offset vector [W,b]
+        Return list containing weight matrix and offset vector [W, b]
         '''
-        W = self.W.eval()
-        b = self.b.eval()
+        return [self.W.numpy(), self.b.numpy()]
 
-        weight = [W, b]
-        return weight
-   
-    def assign(self, weight, sess):
-        for layer, op, port in zip(weight, self.communication, self.communication_ports):
-            sess.run(op, feed_dict={port: layer})
-       
-
-       
-       
-       
-       
-       
-       
+    def assign(self, weight):
+        self.W.assign(weight[0])
+        self.b.assign(weight[1])

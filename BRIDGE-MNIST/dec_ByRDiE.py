@@ -18,9 +18,9 @@ from DecLearning import DecLearning
 
 parser = argparse.ArgumentParser()
 parser.add_argument("monte_trial", help="A number between 0 and 9 to indicate which Monte Carlo trial to run", type=int)
-parser.add_argument("-b","--byzantine", help="Maximum number of Byzantine nodes to defend against, if none defaults to 0", type=int)
-parser.add_argument("-gb", "--goByzantine", help="Boolean to indicate if the specified number of Byzantine nodes actually send out faulty values"
-                    , type=bool)
+parser.add_argument("-b", "--byzantine", help="Maximum number of Byzantine nodes to defend against, if none defaults to 0", type=int)
+parser.add_argument("-gb", "--goByzantine", help="Boolean to indicate if the specified number of Byzantine nodes actually send out faulty values",
+                    type=bool)
 
 args = parser.parse_args()
 
@@ -35,80 +35,63 @@ if args.goByzantine:
 else:
     goByzantine = False
 
-min_neighbor = 4*b+1
+min_neighbor = 4 * b + 1
 
 print(f'Starting Monte Carlo Trial {monte_trial}')
 start = time.time()
 
-#Directory to store result
+# Directory to store result
 os.makedirs('./result/ByRDiE', exist_ok=True)
 
-#Reproducibility
-np.random.seed(30+monte_trial)
-random.seed(a=30+monte_trial)
+# Reproducibility
+np.random.seed(30 + monte_trial)
+random.seed(a=30 + monte_trial)
+tf.random.set_seed(30 + monte_trial)
 
-
-
-para = DecLearning(dataset = 'MNIST', nodes=50, byzantine = b, total_samples=60000)
-loaded = False
-#Generate the graph
-para.gen_graph(min_neigh = min_neighbor)
+para = DecLearning(dataset='MNIST', nodes=50, byzantine=b, total_samples=60000)
+# Generate the graph
+para.gen_graph(min_neigh=min_neighbor)
 local_set, test_data, test_label = data_prep(para.dataset, para.M, para.N, one_hot=True)
 neighbors = para.get_neighbor()
 save = []
 
-#Initialization
-tf.reset_default_graph()
+step_size = 1e-1
 
-#To ensure reproducibility 
-tf.set_random_seed(30+monte_trial)
-
-step_size=1e-1
-
-w_nodes = [linear_classifier(stepsize = step_size) for node in range(para.M)]    
-sess = para.initialization()
+w_nodes = [linear_classifier(stepsize=step_size) for node in range(para.M)]
 
 T = 200
 
-
-#ByRDiE Algorithm
+# ByRDiE Algorithm
 for iteration in range(T):
-
-
-    #Iterates over the first 784 dimensions of the weights
+    # Iterates over the first 784 dimensions of the weights
     for p in range(7840):
-        #print(f'Dimension {p} of W')
-        #Communication 
-        para.communication_w(w_nodes, neighbors, p, sess, para.b, screen = True, goByzantine=goByzantine)
-        #node update step    
-        para.node_update_w(w_nodes, local_set, p, sess, stepsize=step_size/(iteration+1))
-        if p%200 == 199: 
-            #test over all test data
+        # Communication
+        para.communication_w(w_nodes, neighbors, p, para.b, screen=True, goByzantine=goByzantine)
+        # node update step
+        para.node_update_w(w_nodes, local_set, p, stepsize=step_size / (iteration + 1))
+        if p % 200 == 199:
+            # test over all test data
             accuracy = [para.acc_test(node, test_data, test_label) for node in w_nodes]
             print(f'Accuracy for iteration {iteration} is {accuracy}')
             save.append(accuracy)
-    
-    #Iterates over the last 10 dimensions of the bias vector for our linear classifier
+
+    # Iterates over the last 10 dimensions of the bias vector for our linear classifier
     for p in range(10):
-        para.communication_b(w_nodes, neighbors, p, sess, para.b, screen = True, goByzantine=goByzantine)
-        para.node_update_b(w_nodes, local_set, p, sess, stepsize=step_size/(iteration+1))
-    
+        para.communication_b(w_nodes, neighbors, p, para.b, screen=True, goByzantine=goByzantine)
+        para.node_update_b(w_nodes, local_set, p, stepsize=step_size / (iteration + 1))
+
     accuracy = [para.acc_test(node, test_data, test_label) for node in w_nodes]
     print(accuracy)
     print(iteration)
     save.append(accuracy)
 
-
-sess.close()
-
-
-if b!=0 and goByzantine:
+if b != 0 and goByzantine:
     filename = f'./result/ByRDiE/result_ByRDiE_b{b}_{monte_trial}.pickle'
 else:
-    filename = f'./result/ByRDiE/result_ByRDiE_b{b}_faultless_{monte_trial}.pickle'        
+    filename = f'./result/ByRDiE/result_ByRDiE_b{b}_faultless_{monte_trial}.pickle'
 
 end = time.time()
-print(f'Monte Carlo {monte_trial} Done!\n Time elapsed {end-start} seconds\n')
+print(f'Monte Carlo {monte_trial} Done!\n Time elapsed {end - start} seconds\n')
 
 with open(filename, 'wb') as handle:
-    pickle.dump(save, handle) 
+    pickle.dump(save, handle)
