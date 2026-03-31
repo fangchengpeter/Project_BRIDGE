@@ -1,113 +1,109 @@
-# Distributed learning
-
-# Specify M agents, N local samples, dataset, failure type, screening type, stepsize, batchsize, T iterations,
-# b Byzantine agents
+# Decentralized nonconvex learning with CNN (BRIDGE) — CIFAR
+#
+# Each node maintains its own CNN model and communicates only with graph
+# neighbors (peer-to-peer). There is no central parameter server.
+# Specify the number of Byzantine nodes, whether they actually send faulty
+# values, and the screening method to defend against them.
+# Run this 10 times with monte_trial 0-9 for independent trials.
 
 import numpy as np
-from pre_proc import data_prep
+from dist_data import data_prep
 from CNN_model import CNN
+from DecLearning import DecLearning
 import tensorflow as tf
 import time
-from screening_method import Byzantine_algs
-from Byzantine_strategy import Byzantine_strategy
 import pickle
+import random
+import argparse
+import os
 
+parser = argparse.ArgumentParser()
+parser.add_argument("monte_trial",
+                    help="A number between 0 and 9 to indicate which Monte Carlo trial to run",
+                    type=int)
+parser.add_argument("-b", "--byzantine",
+                    help="Maximum number of Byzantine nodes to defend against; defaults to 0",
+                    type=int)
+parser.add_argument("-gb", "--goByzantine",
+                    help="Boolean to indicate if Byzantine nodes actually send faulty values",
+                    type=bool)
+parser.add_argument("-s", "--screening",
+                    help="Screening method (BRIDGE, Median, Krum, Bulyan); default is no screening",
+                    choices=['BRIDGE', 'Median', 'Krum', 'Bulyan'],
+                    type=str)
 
-class experiment_parameters:
-    def __init__(self, agents, dataset, localsize_N, iteration, batchsize=0, stepsize=1e-4,
-                 screen=False, b=0, Byzantine='random'):
-        self.dataset = dataset
-        self.M = agents
-        self.T = iteration
-        self.screen = screen
-        self.b = b
-        self.stepsize = stepsize
-        self.batchsize = batchsize
-        self.N = localsize_N
-        self.Byzantine = Byzantine
-        if self.batchsize > self.N:
-            raise ValueError("Batch size is large than local datasize")
+args = parser.parse_args()
 
+monte_trial = args.monte_trial
+b = args.byzantine if args.byzantine else 0
+goByzantine = args.goByzantine if args.goByzantine else False
 
-def data_distribution(dataset, nodes_M, sample_N):  # samples will be distributed evenly to each node
-    distributed_data, test_data, test_label = data_prep(dataset, nodes_M, nodes_M * sample_N, one_hot=False)
-    return distributed_data, test_data, test_label
+min_neighbor = 0
+if args.screening:
+    screen_method = args.screening
+    dec_method = screen_method
+    if screen_method == 'Bulyan':
+        min_neighbor = 4 * b + 1
+else:
+    screen_method = None
+    dec_method = 'DGD'
 
+print(f'Starting Monte Carlo trial {monte_trial}')
+start = time.time()
 
-def server_to_agent(server, nodes):
-    weights = server.weights()
-    for node in nodes:
-        node.assign(weights)
+# Directory to store results
+os.makedirs(f'./result/{dec_method}', exist_ok=True)
 
+# Set random seeds for reproducibility
+np.random.seed(30 + monte_trial)
+random.seed(a=30 + monte_trial)
+tf.random.set_seed(30 + monte_trial)
 
-def agent_calculation(node, models, sets, batchsize):
-    data, label = sets.next_batch(node, batchsize)
-    w_local = models[node]
-    return w_local.get_gradient(
-        np.array(data, dtype=np.float32),
-        np.array(label, dtype=np.float32),
-        training=True
-    )
+# Network and training parameters
+num_nodes = 20
+batchsize = 250
+stepsize = 1e-4
+T = 5000
 
+para = DecLearning(dataset='CIFAR', nodes=num_nodes, byzantine=b, total_samples=50000)
+para.gen_graph(min_neigh=min_neighbor, con_rate=50)
+local_set, test_data, test_label = data_prep(para.dataset, para.M, para.N, one_hot=False)
+neighbors = para.get_neighbor()
 
-def Byzantine_gradient(strategy, node, models, sets, batchsize):
-    data, label = sets.next_batch(node, batchsize)
-    w_local = models[node]
-    return Byzantine_strategy[strategy](data, label, w_local)
+# Each node has its own CNN — no central server
+w_nodes = [CNN(stepsize=stepsize) for _ in range(num_nodes)]
 
+save = []
 
-def screen(grad, b, method):
-    screened = Byzantine_algs[method](grad, b)
-    return screened
+for iteration in range(T):
+    # Peer-to-peer weight sharing with optional Byzantine screening
+    para.communication_multilayer(w_nodes, neighbors, b=para.b,
+                                  goByzantine=goByzantine,
+                                  screenMethod=screen_method)
 
+    # Evaluate accuracy at each node and report the mean
+    accuracy = [para.acc_test(node,
+                              np.array(test_data, dtype=np.float32),
+                              np.array(test_label, dtype=np.float32))
+                for node in w_nodes]
+    mean_acc = np.mean(accuracy)
+    print(f'Iteration {iteration}: mean accuracy = {mean_acc:.4f}')
+    save.append(mean_acc)
 
-def acc_test(model, t_data, t_label):
-    return model.accuracy_eval(
-        np.array(t_data, dtype=np.float32),
-        np.array(t_label, dtype=np.float32)
-    )
+    # Local mini-batch gradient step at every node
+    para.node_update_cnn(w_nodes, local_set, batchsize)
 
+# Save per-iteration accuracy and final weights
+wb = [node.weights() for node in w_nodes]
+end = time.time()
 
-def server_update(model, gradient, b, screening=False):
-    if screening:
-        grad = screen(gradient, b, screening)
-    else:
-        grad = np.mean(gradient, axis=0)
-    model.apply_ext_gradient(grad)
-    return model
+if b != 0 and goByzantine:
+    filename = f'./result/{dec_method}/result_{dec_method}_b{b}_{monte_trial}.pickle'
+else:
+    filename = f'./result/{dec_method}/result_{num_nodes}_{dec_method}_b{b}_faultless_{monte_trial}.pickle'
 
+print(f'Monte Carlo {monte_trial} done! Time elapsed: {end - start:.1f}s')
 
-if __name__ == "__main__":
-    para = experiment_parameters(agents=25, dataset='CIFAR', localsize_N=2400, iteration=5000,
-                                 batchsize=250, stepsize=1e-4, screen='dimensionwise_trimmed_mean', b=1, Byzantine='random')
-    local_set, test_data, test_label = data_distribution(para.dataset, para.M, para.N)
-
-    tf.random.set_seed(42)
-
-    w_server = CNN(stepsize=para.stepsize)
-    w_nodes = [CNN() for _ in range(para.M)]
-
-    rec = []
-    beginning = time.time()
-    for iteration in range(para.T):
-        # Communication
-        server_to_agent(w_server, w_nodes)
-        # local gradient calculation
-        gradient = []
-        # Byzantine nodes are the first b nodes
-        for node in range(para.b):
-            gradient.append(Byzantine_gradient(para.Byzantine, node, w_nodes, local_set, para.batchsize))
-        for node in range(para.b, para.M):
-            gradient.append(agent_calculation(node, w_nodes, local_set, para.batchsize))
-        # Server update using Adam
-        server_update(w_server, gradient, para.b, screening=para.screen)
-        if iteration % 1 == 0:
-            # test over all test data
-            accuracy = acc_test(w_server, test_data, test_label)
-            rec.append(accuracy)
-            print(accuracy)
-            print(iteration)
-            print(time.time() - beginning)
-
-    with open('result_BRIDGE_b0_5.pickle', 'wb') as handle:
-        pickle.dump(rec, handle)
+with open(filename, 'wb') as handle:
+    pickle.dump(save, handle)
+    pickle.dump(wb, handle)
