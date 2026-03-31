@@ -430,3 +430,70 @@ class DecLearning:
             new_g = np.zeros([10])
             new_g[p] = g[p]
             model.apply_gradient_b(new_g, stepsize)
+
+    def communication_multilayer(self, W, neighbor, b=0,
+                                 goByzantine=False, screenMethod=None):
+        '''
+        Communicate full multi-layer model weights to all neighbors for each node.
+        Designed for multi-layer models such as CNN. Screening is applied per-node
+        over the full weight list using the chosen method.
+
+        Args:
+            W: Nodes in our network (each exposes .weights() and .assign())
+            neighbor: Matrix of neighbors for each node
+            b: Number of Byzantine nodes to defend against (default: 0)
+            goByzantine: Whether the first b nodes actually send faulty values (default: False)
+            screenMethod: One of 'BRIDGE', 'Median', 'Krum', 'Bulyan', or None for plain mean
+        '''
+        from screening_method import (dimensionwise_trimmed_mean,
+                                      dimensionwise_median, krum, bulyan)
+
+        # Snapshot all weights before any updates
+        all_weights = [node.weights() for node in W]
+        num_layers = len(all_weights[0])
+
+        # Inject Byzantine failure into the first b nodes
+        if goByzantine:
+            for byzant in range(b):
+                all_weights[byzant] = [
+                    np.random.uniform(-1, 0, w.shape).astype(np.float32)
+                    for w in all_weights[byzant]
+                ]
+
+        new_weights = []
+        for neighbor_list in neighbor:
+            neighbor_weights = [all_weights[n] for n in neighbor_list]
+
+            if screenMethod == 'BRIDGE':
+                agg = dimensionwise_trimmed_mean(neighbor_weights, b)
+            elif screenMethod == 'Median':
+                agg = dimensionwise_median(neighbor_weights, b)
+            elif screenMethod == 'Krum':
+                agg = krum(neighbor_weights, b)
+            elif screenMethod == 'Bulyan':
+                agg = bulyan(neighbor_weights, b)
+            else:  # Plain mean (DGD)
+                agg = [
+                    np.mean([nw[l] for nw in neighbor_weights], axis=0)
+                    for l in range(num_layers)
+                ]
+            new_weights.append(agg)
+
+        for node, w in zip(W, new_weights):
+            node.assign(w)
+
+    def node_update_cnn(self, W, data, batchsize):
+        '''
+        Perform one mini-batch gradient step for each CNN node.
+
+        Args:
+            W: Nodes in the network (each exposes .train_step_fn(x, y_))
+            data: Training data object with a .next_batch(node_idx, batchsize) method
+            batchsize: Number of samples per mini-batch
+        '''
+        for node_idx, model in enumerate(W):
+            batch_x, batch_y = data.next_batch(node_idx, batchsize)
+            model.train_step_fn(
+                np.array(batch_x, dtype=np.float32),
+                np.array(batch_y, dtype=np.float32)
+            )
